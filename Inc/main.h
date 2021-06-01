@@ -62,8 +62,10 @@ void Error_Handler(void);
 #define Line_V_P_GPIO_Port GPIOC
 #define Line_V_N_Pin GPIO_PIN_1
 #define Line_V_N_GPIO_Port GPIOC
-#define DC_Bus_Pin GPIO_PIN_2
-#define DC_Bus_GPIO_Port GPIOC
+#define DC_Bus_P_Pin GPIO_PIN_2
+#define DC_Bus_P_GPIO_Port GPIOC
+#define DC_Bus_N_Pin GPIO_PIN_3
+#define DC_Bus_N_GPIO_Port GPIOC
 #define DAC_Out_Pin GPIO_PIN_4
 #define DAC_Out_GPIO_Port GPIOA
 #define Ph_AN_PWM_Pin GPIO_PIN_7

@@ -39,7 +39,8 @@
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define					ADC_OFFSET								250																			// Corrects the offset from the ISO224
+#define					ADC_OFFSET_LINE						253																			// Corrects the offset from the ISO224
+#define					ADC_OFFSET_BUS						33																				
 #define         SINE_STEPS          			256                         						// Number of steps to build our sinewave in
   
 #define					PLL_Kp										1.0e-5f																	// PID parameters for our PLL tracking control
@@ -57,27 +58,27 @@
 #define					I_OUT_LOOP_PERIOD					16800																		// Ticks between I_OUT_PID iterations (100us)
 
 #define					DUTY_LIMIT								975				
-#define					PROPORTIONALITY_K_A				878																			// 875 is the value that minimises the difference +3 for equilibrium
+#define					FEEDFORWARD_K							865																			// 875 is the value that minimises the difference +3 for equilibrium
 #define					TARGET_OUTPUT_CURRENT			-100.0f
 #define 				START_UP_CURRENT					-10.0f
-#define					CURRENT_RAMP_RATE					0.005f
+#define					CURRENT_RAMP_RATE					0.01f
 
 #define					GAIN_SIGMA_DELTA					256
 #define					OFFSET_SIGMA_DELTA				32768					
 
-#define					RMS_UPPER_LIMIT						4700000																		// Actually, we don't bother with the root...
-#define					RMS_LOWER_LIMIT						4100000
-#define					FREQ_UPPER_LIMIT					130																				// Corrosponds to +/- 0.5Hz
+#define					RMS_UPPER_LIMIT						80000																		// Actually, we don't bother with the root...
+#define					RMS_LOWER_LIMIT						65000
+#define					FREQ_UPPER_LIMIT					130																			// Corrosponds to +/- 0.5Hz
 #define					FREQ_LOWER_LIMIT				 -130
-#define					V_SUPPLY_CUTOUT						3100
-#define					V_SUPPLY_MINIMUM					2850																			// The minimum voltage needs to be above the rectified grid voltage
+#define					V_SUPPLY_MAXIMUM					450
+#define					V_SUPPLY_MINIMUM					350																			// The minimum voltage needs to be above the rectified grid voltage
 #define					CURRENT_MAX								28000
-#define					PID_I_ERROR_TOLERATED			1000
+#define					PID_I_ERROR_TOLERATED			1500
 #define					CURRENT_REJOIN_THRESHOLD	30000
 
-#define					RUNNING_MASK_CNT					1000																			// Once running, if out of whack for > 100ms, we shut off
-#define					RESTART_MASK_CNT			 	 -1000																			// Monitor mains Vrms for 1sec before considering re-engaging 
-#define					GRID_BAD_FAIL_RATE				10																				//
+#define					RUNNING_MASK_CNT					1000																		// Once running, if out of whack for > 100ms, we shut off
+#define					RESTART_MASK_CNT			 	 -1000																		// Monitor mains Vrms for 1sec before considering re-engaging 
+#define					GRID_BAD_FAIL_RATE				10																			//
 #define					GRID_OK										0	
 
 #define 				CONSTRAIN(x,lower,upper)	((x)<(lower)?(lower):((x)>(upper)?(upper):(x)))
@@ -115,8 +116,9 @@ static volatile uint8_t				Data_to_Process = 0;
 static volatile int32_t				Measured_I;																					// Stores our most up to date output current reading 16bit value	
 static volatile float					Measured_I_f;
 
-static int16_t								ADC_Raw_DC_Bus_V[5];																// Stores ADC readings for the DC_Bus voltages
+static int16_t								ADC_Raw_Bus_V[5];																		// Stores ADC readings for the DC_Bus voltages
 static int16_t								ADC_Raw_Line_V[5];																	// Likewise stores ADC readings for the AC Line voltage
+static int16_t								ADC_Bus_PN[10];
 static int16_t								ADC_Line_P[5];
 static int16_t								ADC_Line_N[5];
 static int32_t 								V_Bus, V_Line;													
@@ -137,7 +139,6 @@ static volatile int16_t 			Freq_Offset;
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
-
 /* USER CODE BEGIN PFP */
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim);
 void HAL_SPI_RxHalfCpltCallback(SPI_HandleTypeDef *hspi);
@@ -185,10 +186,10 @@ int main(void)
   MX_TIM11_Init();
   MX_ADC1_Init();
   MX_ADC2_Init();
-  /* USER CODE BEGIN 2 */	
+  /* USER CODE BEGIN 2 */
 	
 	// 1) Start the ADC engines - These continuously replenish these circular buffers with fresh ADC readings
-		HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_Raw_DC_Bus_V, 5);	
+		HAL_ADC_Start_DMA(&hadc1, (uint32_t*)ADC_Bus_PN, 10);	
 		HAL_ADC_Start_DMA(&hadc2, (uint32_t*)ADC_Line_N, 5);
 		HAL_ADC_Start_DMA(&hadc3, (uint32_t*)ADC_Line_P, 5);
 		
@@ -255,8 +256,14 @@ int main(void)
 			Measured_I_f = (float)Measured_I;
 		}
 		
-		// Process incoming ADC Data		
-		V_Bus = Get_Median(ADC_Raw_DC_Bus_V, 5, 0);	
+		// Process incoming ADC Data			
+		ADC_Raw_Bus_V[0] = ADC_Bus_PN[0] - ADC_Bus_PN[1];
+		ADC_Raw_Bus_V[1] = ADC_Bus_PN[2] - ADC_Bus_PN[3];
+		ADC_Raw_Bus_V[2] = ADC_Bus_PN[4] - ADC_Bus_PN[5];
+		ADC_Raw_Bus_V[3] = ADC_Bus_PN[6] - ADC_Bus_PN[7];
+		ADC_Raw_Bus_V[4] = ADC_Bus_PN[8] - ADC_Bus_PN[9];
+		
+		V_Bus = Get_Median(ADC_Raw_Bus_V, 5, ADC_OFFSET_BUS);	
 
 		ADC_Raw_Line_V[0] = ADC_Line_P[0] - ADC_Line_N[0];
 		ADC_Raw_Line_V[1] = ADC_Line_P[1] - ADC_Line_N[1];
@@ -264,9 +271,10 @@ int main(void)
 		ADC_Raw_Line_V[3] = ADC_Line_P[3] - ADC_Line_N[3];
 		ADC_Raw_Line_V[4] = ADC_Line_P[4] - ADC_Line_N[4];
 		
-		V_Line = Get_Median(ADC_Raw_Line_V, 5, ADC_OFFSET);		
+		V_Line = Get_Median(ADC_Raw_Line_V, 5, ADC_OFFSET_LINE);		
 		
     /* USER CODE END WHILE */
+
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
@@ -314,7 +322,6 @@ void SystemClock_Config(void)
   }
 }
 
-
 /* USER CODE BEGIN 4 */
 void HB_Disable() {
 	HAL_TIM_PWM_Stop(&htim1, TIM_CHANNEL_1);
@@ -361,7 +368,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)	{
 			if(Freq_Offset > FREQ_UPPER_LIMIT || Freq_Offset < FREQ_LOWER_LIMIT) 					// If mains phase is whacky
 				Mains_Good_Bad_Counter -= GRID_BAD_FAIL_RATE;
 			
-			if(V_Bus < V_SUPPLY_MINIMUM || V_Bus > V_SUPPLY_CUTOUT) 											// If our supply voltage is too low/high cutout immediately
+			if(V_Bus < V_SUPPLY_MINIMUM || V_Bus > V_SUPPLY_MAXIMUM) 											// If our supply voltage is too low/high cutout immediately
 				Mains_Good_Bad_Counter = RESTART_MASK_CNT;			
 
 			if(HB_DISABLED == false)	
@@ -369,10 +376,9 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)	{
 				if(Measured_I > CURRENT_MAX || Measured_I < -CURRENT_MAX)										// If our measured current is too large, cutout.
 					Mains_Good_Bad_Counter -= GRID_BAD_FAIL_RATE;						
 
-				if(I_Out_RMS_Error > PID_I_ERROR_TOLERATED)																						// If our current control is not adaquate											
+				if(I_Out_RMS_Error > PID_I_ERROR_TOLERATED)																	// If our current control is not adaquate											
 					Mains_Good_Bad_Counter -= GRID_BAD_FAIL_RATE;	
-			}			
-					
+			}				
 	// -----------------------------------------------------------------------------------------------------------------------------------
 			if(Mains_Good_Bad_Counter < RUNNING_MASK_CNT)																	// Slowly zero any error counts
 				Mains_Good_Bad_Counter++;
@@ -406,7 +412,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)	{
 			}
 		}				
  
-		int32_t Duty_Feedforward = (PROPORTIONALITY_K_A * V_Line) / V_Bus;
+		int32_t Duty_Feedforward = (FEEDFORWARD_K * V_Line) / V_Bus;
 				
 		// Whilst our current sensor is shut down just use the feedforward controller
 		if(Measured_I > CURRENT_REJOIN_THRESHOLD)	{
@@ -435,6 +441,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)	{
 
 		// Write to the DAC so we can debug
 		uint32_t DAC_Data = (uint32_t)((Measured_I/16) + 2048);	
+		//uint32_t DAC_Data = (uint32_t)(V_Bus + 0);	
 		HAL_DAC_SetValue(&hdac, DAC_CHANNEL_1, DAC_ALIGN_12B_R, DAC_Data);    
   }
 	
